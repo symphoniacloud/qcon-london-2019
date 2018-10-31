@@ -1,0 +1,178 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Description: Serverless application infrastructure
+
+Parameters:
+
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+    # e.g., "Z45J1D2QQ43H93", from the Route 53 hosted zone that will contain
+    #   the domain name below.
+
+  DomainName:
+    Type: String
+    # e.g., "api.velocity.symphonia.io"
+
+  ValidationDomain:
+    Type: String
+    # e.g., "symphonia.io"
+
+Mappings:
+
+  # https://docs.aws.amazon.com/general/latest/gr/rande.html#apigateway_region
+  RegionMap:
+    us-east-1:
+      HostedZoneId: Z1UJRXOUMOOFQ8
+    us-east-2:
+      HostedZoneId: ZOJJZC49E0EPZ
+    us-west-1:
+      HostedZoneId: Z2MUQ32089INYE
+    us-west-2:
+      HostedZoneId: Z2OJLYMUO9EFXC
+    eu-central-1:
+      HostedZoneId: Z1U9ULNL0V5AJ3
+    eu-west-1:
+      HostedZoneId: ZLY8HYME6SFDD
+    eu-west-2:
+      HostedZoneId: ZJ5UAJN8Y3Z2Q
+    eu-west-3:
+      HostedZoneId: Z3KY65QIEKYHQQ
+
+Globals:
+
+  Function:
+    Runtime: nodejs8.10
+    MemorySize: 256
+    Timeout: 10
+
+Resources:
+
+  Writer:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: index.handler
+      CodeUri: dist/writer/index.js
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /events
+            Method: post
+
+  Reader:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: index.handler
+      CodeUri: dist/reader/index.js
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref Table
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /events/{id}
+            Method: get
+
+  Health:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: index.handler
+      CodeUri: dist/health/index.js
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref Table
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /health
+            Method: get
+
+  Api:
+    Type: AWS::Serverless::Api
+    Properties:
+      EndpointConfiguration: REGIONAL
+      StageName: Prod
+
+  Table:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    Properties:
+      TableName: !Sub "${AWS::StackName}-table"
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      ProvisionedThroughput:
+        ReadCapacityUnits: 10
+        WriteCapacityUnits: 10
+
+# https://docs.aws.amazon.com/apigateway/latest/developerguide/how-to-custom-domains.html
+# https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-regional-api-custom-domain-create.html
+
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref DomainName
+      DomainValidationOptions:
+        - DomainName: !Ref DomainName
+          ValidationDomain: !Ref ValidationDomain
+
+  CustomDomain:
+    Type: AWS::ApiGateway::DomainName
+    Properties:
+      RegionalCertificateArn: !Ref Certificate
+      DomainName: !Ref DomainName
+      EndpointConfiguration:
+        Types: [ REGIONAL ]
+
+  BasePathMapping:
+    Type: AWS::ApiGateway::BasePathMapping
+    Properties:
+      BasePath: ""
+      DomainName: !Ref CustomDomain
+      RestApiId: !Ref Api
+      Stage: Prod
+
+  HealthCheck:
+    Type: AWS::Route53::HealthCheck
+    Properties: 
+      HealthCheckConfig:
+        FullyQualifiedDomainName: !Sub "${Api}.execute-api.${AWS::Region}.amazonaws.com"
+        RequestInterval: 10
+        ResourcePath: /Prod/health
+        Type: HTTPS
+
+  DnsRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      AliasTarget:
+        DNSName: !GetAtt CustomDomain.RegionalDomainName
+        EvaluateTargetHealth: false
+        HostedZoneId: !FindInMap [RegionMap, !Ref "AWS::Region", HostedZoneId]
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub "${DomainName}."
+      Region: !Sub "${AWS::Region}"
+      SetIdentifier: !Sub "${AWS::Region} API"
+      Type: A
+      HealthCheckId: !Ref HealthCheck
