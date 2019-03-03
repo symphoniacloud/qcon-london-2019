@@ -8,14 +8,15 @@ Parameters:
     Type: AWS::Route53::HostedZone::Id
     # e.g., "Z45J1D2QQ43H93", from the Route 53 hosted zone that will contain
     #   the domain name below.
+    Default: ZJ3XHEOZ3EIRV
 
   DomainName:
     Type: String
-    # e.g., "api.velocity.symphonia.io"
+    Default: "api.qcon.symphonia.io"
 
   ValidationDomain:
     Type: String
-    # e.g., "symphonia.io"
+    Default: "symphonia.io"
 
 Mappings:
 
