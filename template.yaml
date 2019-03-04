@@ -18,9 +18,12 @@ Parameters:
     Type: String
     Default: "api.qcon.symphonia.io"
 
-  WebSocketDomainName:
-    Type: String
-    Default: "api-ws.qcon.symphonia.io"
+  # # Setting custom domain names on WebSocket APIs isn't
+  # #  yet supported by CloudFormation, so this is all
+  # #  done manually.
+  # WebSocketDomainName:
+  #   Type: String
+  #   Default: "api-ws.qcon.symphonia.io"
 
   ValidationDomain:
     Type: String
@@ -54,6 +57,10 @@ Globals:
     MemorySize: 256
     Timeout: 10
 
+  Api:
+    EndpointConfiguration: REGIONAL
+    Cors: "'*'"
+
 Resources:
 
   RestApi:
@@ -67,12 +74,6 @@ Resources:
     Properties:
       Handler: index.handler
       CodeUri: dist/health/index.js
-      Environment:
-        Variables:
-          TABLE_NAME: !Ref Table
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref Table
       Events:
         ApiEvent:
           Type: Api
@@ -81,24 +82,52 @@ Resources:
             Path: /health
             Method: get
 
-  # Reader:
-  #   Type: AWS::Serverless::Function
-  #   Properties:
-  #     Handler: index.handler
-  #     CodeUri: dist/reader/index.js
-  #     Environment:
-  #       Variables:
-  #         TABLE_NAME: !Ref Table
-  #     Policies:
-  #       - DynamoDBReadPolicy:
-  #           TableName: !Ref Table
-  #     Events:
-  #       ApiEvent:
-  #         Type: Api
-  #         Properties:
-  #           RestApiId: !Ref RestApi
-  #           Path: /events/{id}
-  #           Method: get
+  HistoryReader:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: index.handler
+      CodeUri: dist/history_reader/index.js
+      Environment:
+        Variables:
+          MESSAGES_TABLE: !Ref MessagesTable
+      Policies:
+        - Statement:                                                            
+          - Effect: Allow                                                     
+            Action: dynamodb:Query
+            Resource: !Sub "${MessagesTable.Arn}/index/*"
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /history
+            Method: get
+
+  StreamReader:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: index.handler
+      CodeUri: dist/stream_reader/index.js
+      Environment:
+        Variables:
+          CONNECTIONS_TABLE: !Ref ConnectionsTable
+          WEB_SOCKETS_ENDPOINT: !Sub "${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${WebSocketStage}"
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref ConnectionsTable
+        - Statement:
+          - Effect: Allow
+            Action:
+            - 'execute-api:ManageConnections'
+            Resource:
+            - 'arn:aws:execute-api:*:*:*/@connections/*'
+      Events:
+        StreamEvent:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt MessagesTable.StreamArn
+            StartingPosition: LATEST
+            BatchSize: 100
 
   WebSocketApi:
     Type: AWS::ApiGatewayV2::Api
@@ -134,10 +163,10 @@ Resources:
       CodeUri: dist/on_connect/index.js
       Environment:
         Variables:
-          TABLE_NAME: !Ref Table
+          CONNECTIONS_TABLE: !Ref ConnectionsTable
       Policies:
         - DynamoDBCrudPolicy:
-            TableName: !Ref Table
+            TableName: !Ref ConnectionsTable
 
   OnConnectPermission:
     Type: AWS::Lambda::Permission
@@ -175,10 +204,10 @@ Resources:
       CodeUri: dist/on_disconnect/index.js
       Environment:
         Variables:
-          TABLE_NAME: !Ref Table
+          CONNECTIONS_TABLE: !Ref ConnectionsTable
       Policies:
         - DynamoDBCrudPolicy:
-            TableName: !Ref Table
+            TableName: !Ref ConnectionsTable
 
   DisconnectPermission:
     Type: AWS::Lambda::Permission
@@ -216,10 +245,10 @@ Resources:
       CodeUri: dist/on_send/index.js
       Environment:
         Variables:
-          TABLE_NAME: !Ref Table
+          MESSAGES_TABLE: !Ref MessagesTable
       Policies:
         - DynamoDBCrudPolicy:
-            TableName: !Ref Table
+            TableName: !Ref MessagesTable
 
   OnSendPermission:
     Type: AWS::Lambda::Permission
@@ -230,26 +259,48 @@ Resources:
       FunctionName: !Ref OnSend
       Principal: apigateway.amazonaws.com
 
-  Table:
+  ConnectionsTable:
     Type: AWS::DynamoDB::Table
     DeletionPolicy: Retain
     Properties:
-      TableName: !Sub "${AWS::StackName}-table"
+      TableName: !Sub "${AWS::StackName}-connections"
+      BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - AttributeName: type
-          AttributeType: S
         - AttributeName: id
           AttributeType: S
       KeySchema:
-        - AttributeName: type
-          KeyType: HASH
         - AttributeName: id
+          KeyType: HASH
+
+  MessagesTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    Properties:
+      TableName: !Sub "${AWS::StackName}-messages"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: ts
+          AttributeType: N
+        - AttributeName: type
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+        - AttributeName: ts
           KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: messages_by_ts
+          Projection:
+            ProjectionType: ALL
+          KeySchema:
+            - AttributeName: type
+              KeyType: HASH
+            - AttributeName: ts
+              KeyType: RANGE
       StreamSpecification:
         StreamViewType: NEW_AND_OLD_IMAGES
-      ProvisionedThroughput:
-        ReadCapacityUnits: 10
-        WriteCapacityUnits: 10
 
 # https://docs.aws.amazon.com/apigateway/latest/developerguide/how-to-custom-domains.html
 # https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-regional-api-custom-domain-create.html
@@ -278,14 +329,6 @@ Resources:
       RestApiId: !Ref RestApi
       Stage: Prod
 
-  # WebSocketCustomDomain:
-  #   Type: AWS::ApiGateway::DomainName
-  #   Properties:
-  #     RegionalCertificateArn: !Ref Certificate
-  #     DomainName: !Ref WebSocketDomainName
-  #     EndpointConfiguration:
-  #       Types: [ REGIONAL ]
-
   WebSocketDeployment:
     Type: AWS::ApiGatewayV2::Deployment
     DependsOn:
@@ -295,28 +338,12 @@ Resources:
     Properties:
       ApiId: !Ref WebSocketApi
   
-  Stage:
+  WebSocketStage:
     Type: AWS::ApiGatewayV2::Stage
     Properties:
       StageName: Prod
       DeploymentId: !Ref WebSocketDeployment
       ApiId: !Ref WebSocketApi
-
-  # WebSocketCustomDomain:
-  #   Type: AWS::ApiGateway::DomainName
-  #   Properties:
-  #     RegionalCertificateArn: !Ref Certificate
-  #     DomainName: !Ref WebSocketDomainName
-  #     EndpointConfiguration:
-  #       Types: [ REGIONAL ]
-
-  # WebsocketBasePathMapping:
-  #   Type: AWS::ApiGateway::BasePathMapping
-  #   Properties:
-  #     BasePath: ""
-  #     DomainName: !Ref WebSocketCustomDomain
-  #     RestApiId: !Ref WebSocketApi
-  #     Stage: Prod
 
   HealthCheck:
     Type: AWS::Route53::HealthCheck

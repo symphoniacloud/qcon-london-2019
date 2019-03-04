@@ -1,18 +1,17 @@
 import { DocumentClient } from 'aws-sdk/clients/dynamodb';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 
-if (!process.env.TABLE_NAME) {
-    throw new Error('Environment variables "TABLE_NAME" must be set.');
+if (!process.env.CONNECTIONS_TABLE) {
+    throw new Error('Environment variables "CONNECTIONS_TABLE" must be set.');
 }
-const TABLE_NAME = process.env.TABLE_NAME;
+const CONNECTIONS_TABLE = process.env.CONNECTIONS_TABLE;
 
 const documentClient = new DocumentClient();
 
 export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
     let params: DocumentClient.DeleteItemInput = {
-        TableName: TABLE_NAME,
+        TableName: CONNECTIONS_TABLE,
         Key: {
-            type: 'connection',
             id: event.requestContext.connectionId
         }
     };

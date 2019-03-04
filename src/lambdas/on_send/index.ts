@@ -1,24 +1,28 @@
 import { DocumentClient } from 'aws-sdk/clients/dynamodb';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 
-if (!process.env.TABLE_NAME) {
-    throw new Error('Environment variables "TABLE_NAME" must be set.');
+if (!process.env.MESSAGES_TABLE) {
+    throw new Error('Environment variables "MESSAGES_TABLE" must be set.');
 }
-const TABLE_NAME = process.env.TABLE_NAME;
+const MESSAGES_TABLE = process.env.MESSAGES_TABLE;
 
 const documentClient = new DocumentClient();
 
 export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
 
-    let { id, message } = JSON.parse(event.body || '{}');
+    console.log(`event: ${JSON.stringify(event)}`);
 
-    if (id && message) {
+    let { message } = JSON.parse(event.body || '{}');
+
+    if (message) {
         let params: DocumentClient.PutItemInput = {
-            TableName: TABLE_NAME,
+            TableName: MESSAGES_TABLE,
             Item: {
+                id: event.requestContext.messageId,
+                ts: new Date().getTime(),
                 type: 'message',
-                id: id,
-                message: message
+                message: message,
+                source: event.requestContext.connectionId
             }
         };
         console.log(`params: ${JSON.stringify(params)}`)
