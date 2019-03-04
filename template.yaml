@@ -7,12 +7,20 @@ Parameters:
   HostedZoneId:
     Type: AWS::Route53::HostedZone::Id
     # e.g., "Z45J1D2QQ43H93", from the Route 53 hosted zone that will contain
-    #   the domain name below.
+    #   the domain names below.
     Default: ZJ3XHEOZ3EIRV
 
-  DomainName:
+  CertificateDomainName:
+    Type: String
+    Default: "*.qcon.symphonia.io"
+
+  RestDomainName:
     Type: String
     Default: "api.qcon.symphonia.io"
+
+  WebSocketDomainName:
+    Type: String
+    Default: "api-ws.qcon.symphonia.io"
 
   ValidationDomain:
     Type: String
@@ -48,43 +56,11 @@ Globals:
 
 Resources:
 
-  Writer:
-    Type: AWS::Serverless::Function
+  RestApi:
+    Type: AWS::Serverless::Api
     Properties:
-      Handler: index.handler
-      CodeUri: dist/writer/index.js
-      Environment:
-        Variables:
-          TABLE_NAME: !Ref Table
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref Table
-      Events:
-        ApiEvent:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /events
-            Method: post
-
-  Reader:
-    Type: AWS::Serverless::Function
-    Properties:
-      Handler: index.handler
-      CodeUri: dist/reader/index.js
-      Environment:
-        Variables:
-          TABLE_NAME: !Ref Table
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref Table
-      Events:
-        ApiEvent:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /events/{id}
-            Method: get
+      EndpointConfiguration: REGIONAL
+      StageName: Prod
 
   Health:
     Type: AWS::Serverless::Function
@@ -101,15 +77,158 @@ Resources:
         ApiEvent:
           Type: Api
           Properties:
-            RestApiId: !Ref Api
+            RestApiId: !Ref RestApi
             Path: /health
             Method: get
 
-  Api:
-    Type: AWS::Serverless::Api
+  # Reader:
+  #   Type: AWS::Serverless::Function
+  #   Properties:
+  #     Handler: index.handler
+  #     CodeUri: dist/reader/index.js
+  #     Environment:
+  #       Variables:
+  #         TABLE_NAME: !Ref Table
+  #     Policies:
+  #       - DynamoDBReadPolicy:
+  #           TableName: !Ref Table
+  #     Events:
+  #       ApiEvent:
+  #         Type: Api
+  #         Properties:
+  #           RestApiId: !Ref RestApi
+  #           Path: /events/{id}
+  #           Method: get
+
+  WebSocketApi:
+    Type: AWS::ApiGatewayV2::Api
     Properties:
-      EndpointConfiguration: REGIONAL
-      StageName: Prod
+      Name: WebSocket
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: "$request.body.action"
+  
+  ConnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: $connect
+      AuthorizationType: NONE
+      OperationName: ConnectRoute
+      Target: !Join
+        - '/'
+        - - 'integrations'
+          - !Ref ConnectRouteIntegration
+
+  ConnectRouteIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: 
+        Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OnConnect.Arn}/invocations
+
+  OnConnect:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: index.handler
+      CodeUri: dist/on_connect/index.js
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  OnConnectPermission:
+    Type: AWS::Lambda::Permission
+    DependsOn:
+      - WebSocketApi
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref OnConnect
+      Principal: apigateway.amazonaws.com
+
+  DisconnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: $disconnect
+      AuthorizationType: NONE
+      OperationName: DisconnectRoute
+      Target: !Join
+        - '/'
+        - - 'integrations'
+          - !Ref DisconnectRouteIntegration
+
+  DisconnectRouteIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: 
+        Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OnDisconnect.Arn}/invocations
+
+  OnDisconnect:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: index.handler
+      CodeUri: dist/on_disconnect/index.js
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  DisconnectPermission:
+    Type: AWS::Lambda::Permission
+    DependsOn:
+      - WebSocketApi
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref OnDisconnect
+      Principal: apigateway.amazonaws.com
+  
+  SendRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: send
+      AuthorizationType: NONE
+      OperationName: SendRoute
+      Target: !Join
+        - '/'
+        - - 'integrations'
+          - !Ref SendRouteIntegration
+
+  SendRouteIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: 
+        Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OnSend.Arn}/invocations
+
+  OnSend:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: index.handler
+      CodeUri: dist/on_send/index.js
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  OnSendPermission:
+    Type: AWS::Lambda::Permission
+    DependsOn:
+      - WebSocketApi
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref OnSend
+      Principal: apigateway.amazonaws.com
 
   Table:
     Type: AWS::DynamoDB::Table
@@ -117,11 +236,15 @@ Resources:
     Properties:
       TableName: !Sub "${AWS::StackName}-table"
       AttributeDefinitions:
+        - AttributeName: type
+          AttributeType: S
         - AttributeName: id
           AttributeType: S
       KeySchema:
-        - AttributeName: id
+        - AttributeName: type
           KeyType: HASH
+        - AttributeName: id
+          KeyType: RANGE
       StreamSpecification:
         StreamViewType: NEW_AND_OLD_IMAGES
       ProvisionedThroughput:
@@ -134,32 +257,72 @@ Resources:
   Certificate:
     Type: AWS::CertificateManager::Certificate
     Properties:
-      DomainName: !Ref DomainName
+      DomainName: !Ref CertificateDomainName
       DomainValidationOptions:
-        - DomainName: !Ref DomainName
+        - DomainName: !Ref CertificateDomainName
           ValidationDomain: !Ref ValidationDomain
-
-  CustomDomain:
+      
+  RestCustomDomain:
     Type: AWS::ApiGateway::DomainName
     Properties:
       RegionalCertificateArn: !Ref Certificate
-      DomainName: !Ref DomainName
+      DomainName: !Ref RestDomainName
       EndpointConfiguration:
         Types: [ REGIONAL ]
 
-  BasePathMapping:
+  RestBasePathMapping:
     Type: AWS::ApiGateway::BasePathMapping
     Properties:
       BasePath: ""
-      DomainName: !Ref CustomDomain
-      RestApiId: !Ref Api
+      DomainName: !Ref RestCustomDomain
+      RestApiId: !Ref RestApi
       Stage: Prod
+
+  # WebSocketCustomDomain:
+  #   Type: AWS::ApiGateway::DomainName
+  #   Properties:
+  #     RegionalCertificateArn: !Ref Certificate
+  #     DomainName: !Ref WebSocketDomainName
+  #     EndpointConfiguration:
+  #       Types: [ REGIONAL ]
+
+  WebSocketDeployment:
+    Type: AWS::ApiGatewayV2::Deployment
+    DependsOn:
+      - ConnectRoute
+      - SendRoute
+      - DisconnectRoute
+    Properties:
+      ApiId: !Ref WebSocketApi
+  
+  Stage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      StageName: Prod
+      DeploymentId: !Ref WebSocketDeployment
+      ApiId: !Ref WebSocketApi
+
+  # WebSocketCustomDomain:
+  #   Type: AWS::ApiGateway::DomainName
+  #   Properties:
+  #     RegionalCertificateArn: !Ref Certificate
+  #     DomainName: !Ref WebSocketDomainName
+  #     EndpointConfiguration:
+  #       Types: [ REGIONAL ]
+
+  # WebsocketBasePathMapping:
+  #   Type: AWS::ApiGateway::BasePathMapping
+  #   Properties:
+  #     BasePath: ""
+  #     DomainName: !Ref WebSocketCustomDomain
+  #     RestApiId: !Ref WebSocketApi
+  #     Stage: Prod
 
   HealthCheck:
     Type: AWS::Route53::HealthCheck
     Properties: 
       HealthCheckConfig:
-        FullyQualifiedDomainName: !Sub "${Api}.execute-api.${AWS::Region}.amazonaws.com"
+        FullyQualifiedDomainName: !Sub "${RestApi}.execute-api.${AWS::Region}.amazonaws.com"
         RequestInterval: 10
         ResourcePath: /Prod/health
         Type: HTTPS
@@ -168,11 +331,11 @@ Resources:
     Type: AWS::Route53::RecordSet
     Properties:
       AliasTarget:
-        DNSName: !GetAtt CustomDomain.RegionalDomainName
+        DNSName: !GetAtt RestCustomDomain.RegionalDomainName
         EvaluateTargetHealth: false
         HostedZoneId: !FindInMap [RegionMap, !Ref "AWS::Region", HostedZoneId]
       HostedZoneId: !Ref HostedZoneId
-      Name: !Sub "${DomainName}."
+      Name: !Sub "${RestDomainName}."
       Region: !Sub "${AWS::Region}"
       SetIdentifier: !Sub "${AWS::Region} API"
       Type: A
