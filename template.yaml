@@ -115,7 +115,7 @@ Resources:
           CONNECTIONS_TABLE: !Ref ConnectionsTable
           WEB_SOCKETS_ENDPOINT: !Sub "${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${WebSocketStage}"
       Policies:
-        - DynamoDBReadPolicy:
+        - DynamoDBCrudPolicy:
             TableName: !Ref ConnectionsTable
         - Statement:
           - Effect: Allow
