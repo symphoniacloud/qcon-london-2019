@@ -56,9 +56,11 @@ Globals:
     Runtime: nodejs8.10
     MemorySize: 256
     Timeout: 10
+    Environment:
+      Variables:
+        REGION: !Ref AWS::Region
 
   Api:
-    EndpointConfiguration: REGIONAL
     Cors: "'*'"
 
 Resources:

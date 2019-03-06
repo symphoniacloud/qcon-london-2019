@@ -9,22 +9,27 @@ import Html.Events exposing (..)
 import Http
 import Json.Decode
 import Json.Encode
+import List.Extra
 import Task
 
 
 type alias Message =
-    { message : String
+    { id : String
+    , region : String
+    , message : String
     , timestamp : Int
     }
 
 
 toMessage : SocketMessage -> Message
 toMessage sm =
-    Message sm.message (String.toInt sm.timestamp |> Maybe.withDefault 0)
+    Message sm.id sm.region sm.message (String.toInt sm.timestamp |> Maybe.withDefault 0)
 
 
 type alias SocketMessage =
-    { message : String
+    { id : String
+    , region : String
+    , message : String
     , timestamp : String
     }
 
@@ -76,7 +81,9 @@ update message model =
                         newMessages =
                             List.map toMessage socketMessages
                     in
-                    ( { model | messages = List.append model.messages newMessages }, jumpToBottom "content" )
+                    ( { model | messages = List.append model.messages newMessages |> List.Extra.uniqueBy .id }
+                    , jumpToBottom "content"
+                    )
 
                 Result.Err err ->
                     ( { model | error = Just (Json.Decode.errorToString err) }, Cmd.none )
@@ -108,7 +115,9 @@ historyDecoder =
 
 historyMessageDecoder : Json.Decode.Decoder Message
 historyMessageDecoder =
-    Json.Decode.map2 Message
+    Json.Decode.map4 Message
+        (Json.Decode.field "id" Json.Decode.string)
+        (Json.Decode.field "region" Json.Decode.string)
         (Json.Decode.field "message" Json.Decode.string)
         (Json.Decode.field "ts" Json.Decode.int)
 
@@ -120,7 +129,9 @@ socketDecoder =
 
 socketMessageDecoder : Json.Decode.Decoder SocketMessage
 socketMessageDecoder =
-    Json.Decode.map2 SocketMessage
+    Json.Decode.map4 SocketMessage
+        (Json.Decode.field "id" Json.Decode.string)
+        (Json.Decode.field "region" Json.Decode.string)
         (Json.Decode.field "message" Json.Decode.string)
         (Json.Decode.field "ts" Json.Decode.string)
 
@@ -152,8 +163,6 @@ view model =
             , div [ class "pure-u pure-u-1 controls" ]
                 [ Html.form [ class "pure-form pure-u-1", onSubmit SendMessage ]
                     [ input [ class "pure-input-1", type_ "text", placeholder "What's the good word?", value (Maybe.withDefault "" model.input), onInput UpdateInput ] []
-                    -- , div [ class "pure-input-1-4" ]
-                    --     [ input [ class "pure-button pure-button-primary", type_ "submit", class "", value "Send" ] [] ]
                     ]
                 ]
             ]
@@ -162,7 +171,7 @@ view model =
 
 viewMessage : Message -> Html Msg
 viewMessage message =
-    p [ class "message" ] [ text message.message ]
+    p [ class "message" ] [ text (message.region ++ " | " ++ message.message) ]
 
 
 
